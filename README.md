@@ -1,20 +1,34 @@
 # EVE Healthcare API
 
-Backend service for booking diagnostic tests at centres, with JWT authentication, simulated payments, and an idempotent payment webhook.
+A backend service for booking diagnostic tests at partner centres. It handles user authentication, centre-specific test pricing, bookings, simulated payments, and an idempotent payment webhook.
+
+**Repository:** https://github.com/code-well0/eve-sde-assignment
+
+---
 
 ## Tech Stack
 
-FastAPI · PostgreSQL · SQLAlchemy · JWT · Docker · Pytest
+| Layer          | Choice                  |
+| -------------- | ----------------------- |
+| Framework      | FastAPI                 |
+| Database       | PostgreSQL + SQLAlchemy |
+| Auth           | JWT (bearer tokens)     |
+| Testing        | Pytest                  |
+| Infrastructure | Docker, Docker Compose  |
 
 ## Features
 
-- Signup/login with JWT authentication
-- Diagnostic centres and tests, with centre-specific pricing
-- Authenticated bookings (users see only their own)
-- Simulated payments and payment webhooks
-- Idempotent webhook handling via a unique `event_id`
+- Signup and login with JWT authentication
+- Diagnostic centres and tests, with **centre-specific pricing**
+- Authenticated bookings; users can only see their own
+- Cancellation of eligible bookings
+- Simulated payments with webhook support
+- **Idempotent webhook handling** using a unique `event_id`
 - Input validation and consistent error responses
-- Automated tests
+- Automated test suite
+- One-command Docker setup (API + PostgreSQL)
+
+---
 
 ## Getting Started
 
@@ -24,54 +38,93 @@ FastAPI · PostgreSQL · SQLAlchemy · JWT · Docker · Pytest
 docker compose up --build
 ```
 
-### Option 2: Local
+The API runs at `http://localhost:8000`.
+
+### Option 2: Local setup
+
+**1. Create a virtual environment and install dependencies**
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
+source .venv/bin/activate        # Linux/macOS
+.venv\Scripts\activate           # Windows
 pip install -r requirements.txt
 ```
 
-Create a `.env` file:
+**2. Configure environment variables**
+
+Create a `.env` file in the project root:
 
 ```env
 DATABASE_URL=postgresql+psycopg2://postgres:postgres@localhost:5432/eve_healthcare
 SECRET_KEY=your-secret-key
 ```
 
-Run the API:
+Make sure PostgreSQL is running and the `eve_healthcare` database exists.
+
+**3. Start the server**
 
 ```bash
 uvicorn app.main:app --reload
 ```
 
-Interactive docs: http://localhost:8000/docs
+### Useful URLs
 
-## API Endpoints
+| URL                            | Description                      |
+| ------------------------------ | -------------------------------- |
+| http://localhost:8000/docs     | Interactive Swagger documentation |
+| http://localhost:8000/health   | Health check                     |
 
-| Method | Endpoint             | Auth | Purpose                  |
-|--------|----------------------|------|--------------------------|
-| POST   | `/auth/signup`       | No   | Register a user          |
-| POST   | `/auth/login`        | No   | Get a JWT token          |
-| GET    | `/centres/`          | No   | List centres             |
-| GET    | `/tests/`            | No   | List tests               |
-| POST   | `/bookings/`         | Yes  | Create a booking         |
-| GET    | `/bookings/`         | Yes  | List your bookings       |
-| POST   | `/payments/`         | Yes  | Simulate a payment       |
-| POST   | `/payments/webhook/` | No   | Receive payment events   |
+---
 
-## Payment Flow
+## API Reference
 
-1. User creates a booking, which starts as `PENDING`.
-2. User pays via `POST /payments/`.
-3. Successful payment moves the booking to `CONFIRMED`; failed payment moves it to `FAILED`.
-4. The webhook can also update payment status. Each event carries a unique `event_id`, so a repeated delivery is ignored instead of being processed twice.
+Request and response schemas are available in the interactive docs at `/docs`.
+
+| Method | Endpoint                        | Auth | Description               |
+| ------ | ------------------------------- | :--: | ------------------------- |
+| POST   | `/auth/signup`                  |  No  | Register a new user       |
+| POST   | `/auth/login`                   |  No  | Log in and receive a JWT  |
+| GET    | `/centres/`                     |  No  | List diagnostic centres   |
+| GET    | `/centres/{centre_id}`          |  No  | Get a single centre       |
+| GET    | `/tests/`                       |  No  | List diagnostic tests     |
+| GET    | `/tests/{test_id}`              |  No  | Get a single test         |
+| POST   | `/bookings/`                    | Yes  | Create a booking          |
+| GET    | `/bookings/`                    | Yes  | List your bookings        |
+| GET    | `/bookings/{booking_id}`        | Yes  | Get one of your bookings  |
+| PATCH  | `/bookings/{booking_id}/cancel` | Yes  | Cancel a booking          |
+| POST   | `/payments/`                    | Yes  | Make a simulated payment  |
+| POST   | `/payments/webhook/`            |  No  | Receive payment events    |
+| GET    | `/health`                       |  No  | Service health check      |
+
+Protected endpoints expect the header `Authorization: Bearer <token>`.
+
+---
+
+## How Payments Work
+
+```
+Booking created ──► PENDING ──┬─► payment succeeds ──► CONFIRMED
+                              └─► payment fails    ──► FAILED
+```
+
+1. A new booking starts as `PENDING`.
+2. The user pays through `POST /payments/`.
+3. A successful payment confirms the booking; a failed one marks it `FAILED`.
+4. A payment provider can also report the outcome through the webhook.
+5. Every webhook event carries a unique `event_id`. If the same event arrives twice, the existing payment record is returned and nothing is processed again.
+
+---
 
 ## Design Decisions
 
-- **Idempotency:** `event_id` is stored with a unique constraint, so duplicate webhooks cannot double-confirm a booking.
-- **Amount check:** the webhook amount must match the booking amount, otherwise the event is rejected.
-- **Centre-specific pricing:** price lives on the centre-test relationship, not on the test itself.
+- **Idempotent webhooks:** `event_id` has a unique database constraint, so retried deliveries can never create duplicate payments or double-confirm a booking.
+- **Amount validation:** a webhook is rejected if its amount does not match the booking amount.
+- **Centre-specific pricing:** price is stored on the centre-test relationship, because the same test can cost different amounts at different centres.
+- **Ownership checks:** every booking query is scoped to the authenticated user.
+- **Separated business logic:** booking, payment, and webhook rules live outside the route handlers, which keeps routes thin and logic testable.
+
+---
 
 ## Testing
 
@@ -79,17 +132,28 @@ Interactive docs: http://localhost:8000/docs
 pytest
 ```
 
+The suite covers authentication, input validation, protected endpoints, bookings, payments, and webhook validation.
+
+---
+
 ## Assumptions
 
-- Payments are simulated; no real gateway is integrated.
-- Centre/test management is not admin-restricted yet.
-- PostgreSQL is the only supported database.
+- Payments are simulated; no real payment gateway is integrated.
+- Centre and test management endpoints are not admin-restricted in this version.
+- PostgreSQL is the supported database.
+- Appointment times must be in the future.
+- The booking amount comes from the price configured for the selected centre and test.
+- `event_id` uniquely identifies a payment webhook event.
+
+---
 
 ## Future Improvements
 
-- Alembic migrations
-- Admin roles for centre/test management
+- Alembic database migrations
+- Admin roles for centre and test management
 - Real payment gateway integration
 - Webhook signature verification
-- Redis/Celery for background processing
+- Background processing with Redis/Celery
 - Rate limiting
+- Pagination on list endpoints
+- Structured logging
